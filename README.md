@@ -1,0 +1,176 @@
+# ComfyUI Portable — Intel GPU Optimized Edition
+
+> **Original Repository**: [https://github.com/Comfy-Org/ComfyUI](https://github.com/Comfy-Org/ComfyUI)  
+> **Test Platform**: Intel Core Ultra 9 285H (Arrow Lake) + Arc iGPU (8 Xe-core, 128 EU)  
+> **RAM**: 128 GB DDR5 (shared with GPU)  
+> **OS**: Ubuntu 26.04 LTS | **Kernel**: 7.0.0-15-generic  
+> **PyTorch**: 2.12.0+xpu | **Python**: 3.14  
+> **GPU Driver**: libze-intel-gpu1 26.14.37833.4  
+> **oneAPI**: 2026.0
+
+---
+
+## Overview
+
+This is a portable ComfyUI installation optimized for **Intel Arc GPU / integrated graphics + Linux XPU** platforms. It is specifically tested on the platform described above; behavior on other hardware or driver versions may differ.
+
+The original ComfyUI is primarily designed for NVIDIA CUDA users. The Intel XPU software stack lacks some of the protection mechanisms found in CUDA (TDR watchdog, graceful error recovery, etc.), which can cause black images or crashes at higher resolutions and longer generation steps.
+
+This fork adds **per-step GPU cooling** to the KSampler to compensate for these missing protections, enabling stable image generation at higher resolutions.
+
+> ⚠️ **Linux only — no Windows support.** Only `run_intel_gpu.sh` is provided. There is no `.bat` equivalent. The original ComfyUI's Windows launcher is not included in this portable edition.
+
+---
+
+## Changes Made
+
+### 1. 🧊 KSampler Per-Step Cooling
+
+**File modified**: `ComfyUI/comfy/samplers.py`
+
+Every diffusion step of the KSampler now includes:
+- **3 seconds cooldown** after each step — gives the GPU time to recover
+- **Throttling detection** — if a step takes more than 2× the median time, an extra 10 seconds of cooldown is added
+- **`gc.collect()` + `torch.xpu.empty_cache()`** — releases GPU memory after each step to reduce fragmentation
+
+```python
+# Before: no cooling between diffusion steps
+callback(i, denoised, x, total_steps)
+
+# After: 3s cooldown with throttling detection after each step
+callback(i, denoised, x, total_steps)
+time.sleep(3)  # per-step cooldown
+torch.xpu.empty_cache()
+```
+
+### 2. 🚀 XPU Environment Variables
+
+**File modified**: `run_intel_gpu.sh`
+
+Added Intel XPU-specific optimizations:
+- `SYCL_CACHE_PERSISTENT=1` — persist SYCL kernel cache
+- `SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1` — lower latency
+- `PYTORCH_DEVICE=xpu` — force XPU backend
+- `TORCH_COMPILE_BACKEND=eager` — `torch.compile` is incomplete on XPU
+- `TOKENIZERS_PARALLELISM=false` — prevent tokenizer issues
+
+### 3. No Other Modifications
+
+The rest of ComfyUI is unmodified. All standard nodes, workflows, and extensions work as expected.
+
+---
+
+## Before vs After
+
+| Test Case | Before (no cooling) | After (with cooling) |
+|-----------|-------------------|---------------------|
+| **1024×1024, 8 steps** | ✅ Works | ✅ Works |
+| **1440×1024, 16 steps** | ❌ Black image (NaN) | ✅ **Normal output** |
+| **Higher resolutions** | ❌ Black image / crash | ✅ Expected stable |
+
+**Root Cause**: Black images at higher resolutions are caused by GPU numerical instability (NaN output) under sustained load — not a model issue. The Intel XPU software stack lacks CUDA-grade protection mechanisms, and per-step cooling compensates for this.
+
+---
+
+## File Change Log
+
+| File | Change |
+|------|--------|
+| `run_intel_gpu.sh` | Added XPU environment variables |
+| `ComfyUI/comfy/samplers.py` | Added per-step cooling + throttling detection in KSampler |
+| `README.md` | **This file** — documentation |
+
+---
+
+## Quick Start
+
+```bash
+cd ComfyUI_portable
+./run_intel_gpu.sh
+```
+
+The script will:
+1. Create a Python virtual environment on first run (if `venv/` doesn't exist)
+2. Install PyTorch XPU from `https://download.pytorch.org/whl/xpu`
+3. Install ComfyUI dependencies
+4. Launch ComfyUI
+
+---
+
+# ComfyUI Portable — Intel GPU 优化版
+
+> **原始仓库**: [https://github.com/Comfy-Org/ComfyUI](https://github.com/Comfy-Org/ComfyUI)  
+> **测试平台**: Intel Core Ultra 9 285H (Arrow Lake) + Arc iGPU (8 Xe-core, 128 EU)  
+> **内存**: 128 GB DDR5（与 GPU 共享）  
+> **系统**: Ubuntu 26.04 LTS | **内核**: 7.0.0-15-generic  
+> **PyTorch**: 2.12.0+xpu | **Python**: 3.14  
+> **GPU 驱动**: libze-intel-gpu1 26.14.37833.4  
+> **oneAPI**: 2026.0
+
+---
+
+## 概述
+
+这是针对 **Intel Arc GPU / 集成显卡 + Linux XPU** 平台的 ComfyUI 便携优化版。仅在上述平台上测试验证，其他硬件或驱动版本下表现可能不同。
+
+原始 ComfyUI 主要面向 NVIDIA CUDA 用户。Intel XPU 软件栈缺少 CUDA 中的保护机制（TDR 看门狗、优雅错误恢复等），在高分辨率/多步数生成时可能导致黑图或崩溃。
+
+本版本通过在 KSampler 中加入**每步 GPU 冷却**来补偿这些缺失的保护，实现更高分辨率下的稳定出图。
+
+> ⚠️ **仅限 Linux，不支持 Windows。** 仅提供 `run_intel_gpu.sh`，没有 `.bat` 版本。原始 ComfyUI 的 Windows 启动器不包含在本便携版中。
+
+---
+
+## 改动清单
+
+### 1. 🧊 KSampler 每步冷却
+
+**修改文件**: `ComfyUI/comfy/samplers.py`
+
+KSampler 的每个 diffusion step 现在包含：
+- **每步休息 3 秒** — 给 GPU 恢复时间
+- **降频检测** — 单步耗时超过中位数 2 倍时额外冷却 10 秒
+- **`gc.collect()` + `torch.xpu.empty_cache()`** — 每步释放显存
+
+### 2. 🚀 XPU 环境变量
+
+**修改文件**: `run_intel_gpu.sh`
+
+新增 Intel XPU 专用优化配置（SYCL 缓存、Level Zero、禁用 `torch.compile` 等）。
+
+### 3. 其他文件未修改
+
+标准节点、工作流和扩展均不受影响。
+
+---
+
+## 优化前后对比
+
+| 测试场景 | 优化前（无冷却） | 优化后（有冷却） |
+|---------|----------------|----------------|
+| **1024×1024, 8 步** | ✅ 正常 | ✅ 正常 |
+| **1440×1024, 16 步** | ❌ 黑图 (NaN) | ✅ **正常出图** |
+| 更高分辨率 | ❌ 黑图 / 崩溃 | ✅ 预期稳定 |
+
+**根因**: 高分辨率下的黑图是 GPU 持续负载下的数值不稳定（NaN 输出）导致的，不是模型问题。每步冷却有效补偿了 Intel XPU 软件栈缺失的保护机制。
+
+---
+
+## 文件变更清单
+
+| 文件 | 变更 |
+|------|------|
+| `run_intel_gpu.sh` | 新增 XPU 环境变量 |
+| `ComfyUI/comfy/samplers.py` | KSampler 每步冷却 + 降频检测 |
+| `README.md` | **本文档** |
+
+---
+
+## 快速开始
+
+```bash
+cd ComfyUI_portable
+./run_intel_gpu.sh
+```
+
+脚本会自动创建虚拟环境、安装 PyTorch XPU 和依赖，然后启动 ComfyUI。
